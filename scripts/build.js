@@ -9,6 +9,6 @@ await rm(dist, { recursive: true, force: true });
 await cp(`${root}web`, dist, { recursive: true });
 await cp(`${root}scripts`, `${dist}/scripts`, {
   recursive: true,
-  filter: (src) => !/[\\/](cli\.js|ge-cache\.js|build-pages\.js)$/.test(src),
+  filter: (src) => !/[\\/](cli\.js|ge-cache\.js|build\.js)$/.test(src),
 });
 console.log("Built dist/");

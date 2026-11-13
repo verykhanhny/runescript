@@ -1,5 +1,5 @@
 /** RS3 profit from buying runes at shops (fixed price) and selling them on the Grand Exchange. */
-import { GE_TAX, fetchGuidePrices, item } from "./lib/profit.js";
+import { GE_TAX, fetchGuidePrices, fetchGuidePricesBatch, item } from "./lib/profit.js";
 
 // Margin thresholds for the colour coding, in gp of total profit on a full shop stock.
 const GOOD_PROFIT = 10_000;
@@ -54,6 +54,7 @@ export const meta = {
 
 export const requiredItems = () => RUNES.map(([rune]) => rune);
 export const fetchPrices = (urlFor, init, fetchFn) => fetchGuidePrices(requiredItems(), urlFor, init, fetchFn);
+export const fetchPricesBatch = (endpoint, init, fetchFn) => fetchGuidePricesBatch(requiredItems(), endpoint, init, fetchFn);
 
 const status = (profit) => (profit > GOOD_PROFIT ? "good" : profit > 0 ? "warn" : "bad");
 const nf = new Intl.NumberFormat("en-US");

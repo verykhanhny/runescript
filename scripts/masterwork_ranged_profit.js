@@ -58,4 +58,4 @@ const script = defineProfitScript({
   sections: [{ title: "Masterwork ranged armour", recipes }],
 });
 
-export const { meta, requiredItems, fetchPrices, calculate } = script;
+export const { meta, requiredItems, fetchPrices, fetchPricesBatch, calculate } = script;

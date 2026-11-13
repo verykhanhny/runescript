@@ -94,7 +94,7 @@ if (!script) {
     button.disabled = true;
     body.innerHTML = '<p class="meta">Loading prices…</p>';
     try {
-      const prices = await script.fetchPrices((itemId) => `/api/price/${itemId}`);
+      const prices = await script.fetchPricesBatch("/api/prices");
       const result = script.calculate(prices);
       body.innerHTML = result.sections.map(renderSection).join("");
       wireChecklist();

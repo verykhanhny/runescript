@@ -54,17 +54,46 @@ export async function fetchGuidePrices(items, urlFor = OFFICIAL_API_URL, init = 
 }
 
 /**
+ * Fetch all guide prices in one request to a batch endpoint (`GET {endpoint}?ids=1,2,3`) that
+ * answers `{ prices: { id: price }, errors: { id: message } }`. Items the server could not get
+ * are requested again a few times before giving up. Returns Map<itemId, price>.
+ */
+export async function fetchGuidePricesBatch(items, endpoint, init = {}, fetchFn = fetch) {
+  const names = new Map(items.map((it) => [it.id, it.name]));
+  const prices = new Map();
+  let pending = [...names.keys()];
+  let errors = {};
+  for (let attempt = 1; pending.length && attempt <= 3; attempt++) {
+    if (attempt > 1) await new Promise((resolve) => setTimeout(resolve, 1000 * attempt));
+    const response = await fetchFn(`${endpoint}?ids=${pending.join(",")}`, init);
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const payload = JSON.parse(await response.text());
+    for (const [id, price] of Object.entries(payload.prices)) prices.set(Number(id), parseGuidePrice(price));
+    errors = payload.errors ?? {};
+    pending = pending.filter((id) => !prices.has(id));
+  }
+  if (pending.length) {
+    const id = pending[0];
+    throw new Error(`${names.get(id)}: ${errors[id] ?? "no price returned"}`);
+  }
+  return prices;
+}
+
+/**
  * Define a script from declarative recipes.
  *
  * sections: [{ title, recipes: [{ output: Item, hours, detail?, inputs: [[Item, qty], ...] }] }]
  *
- * Returns { meta, requiredItems, fetchPrices, calculate } as the web page and CLI expect.
+ * Returns { meta, requiredItems, fetchPrices, fetchPricesBatch, calculate } as the web page and CLI expect.
  */
 export function defineProfitScript({ meta, sections }) {
   const requiredItems = () =>
     sections.flatMap((s) => s.recipes.flatMap((r) => [r.output, ...r.inputs.map(([it]) => it)]));
 
   const fetchPrices = (urlFor, init, fetchFn) => fetchGuidePrices(requiredItems(), urlFor, init, fetchFn);
+
+  const fetchPricesBatch = (endpoint, init, fetchFn) =>
+    fetchGuidePricesBatch(requiredItems(), endpoint, init, fetchFn);
 
   function buildRow(prices, recipe) {
     const inputs = recipe.inputs.map(([it, qty]) => {
@@ -101,5 +130,5 @@ export function defineProfitScript({ meta, sections }) {
     };
   }
 
-  return { meta, requiredItems, fetchPrices, calculate };
+  return { meta, requiredItems, fetchPrices, fetchPricesBatch, calculate };
 }

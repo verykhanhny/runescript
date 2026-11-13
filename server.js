@@ -24,6 +24,24 @@ async function proxyPrice(id, res) {
   }
 }
 
+// GET /api/prices?ids=1,2,3 -> { prices: { id: price }, errors: { id: message } } (same as worker.js)
+async function proxyPrices(ids, res) {
+  const prices = {};
+  const errors = {};
+  await Promise.all(ids.map(async (id) => {
+    try {
+      const upstream = await cachedFetch(OFFICIAL_API_URL(id), {
+        headers: { "User-Agent": USER_AGENT },
+        signal: AbortSignal.timeout(20_000),
+      });
+      prices[id] = JSON.parse(await upstream.text()).item.current.price;
+    } catch (error) {
+      errors[id] = error.message;
+    }
+  }));
+  res.writeHead(200, { "Content-Type": "application/json" }).end(JSON.stringify({ prices, errors }));
+}
+
 async function serveStatic(pathname, res) {
   const rel = normalize(pathname === "/" ? "/index.html" : pathname);
   const file = rel.startsWith("/scripts/") ? join(root, rel) : join(root, "web", rel);
@@ -38,7 +56,12 @@ async function serveStatic(pathname, res) {
 
 createServer(async (req, res) => {
   try {
-    const { pathname } = new URL(req.url, "http://localhost");
+    const { pathname, searchParams } = new URL(req.url, "http://localhost");
+    if (pathname === "/api/prices") {
+      const ids = [...new Set((searchParams.get("ids") ?? "").split(",").filter(Boolean))];
+      if (!ids.length || !ids.every((id) => /^\d+$/.test(id))) return res.writeHead(400).end("Bad item ids");
+      return await proxyPrices(ids, res);
+    }
     const match = pathname.match(/^\/api\/price\/(\d+)$/);
     if (match) await proxyPrice(match[1], res);
     else await serveStatic(pathname, res);

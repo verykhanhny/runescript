@@ -5,8 +5,11 @@
   "scripts": {
     "start": "node --watch server.js",
     "cli": "node scripts/cli.js",
-    "build": "node scripts/build-pages.js",
+    "build": "node scripts/build.js",
     "dev:worker": "npm run build && wrangler dev",
     "deploy": "npm run build && wrangler deploy"
+  },
+  "devDependencies": {
+    "wrangler": "^4.161.0"
   }
 }
