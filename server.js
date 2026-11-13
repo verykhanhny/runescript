@@ -15,7 +15,12 @@ const TYPES = { ".html": "text/html", ".js": "text/javascript", ".css": "text/cs
 const ASSETS = {
   async fetch(request) {
     const { pathname } = new URL(request.url);
-    const rel = normalize(decodeURIComponent(pathname === "/" ? "/index.html" : pathname));
+    let rel;
+    try {
+      rel = normalize(decodeURIComponent(pathname === "/" ? "/index.html" : pathname));
+    } catch {
+      return new Response("Bad request", { status: 400 }); // malformed %-escape
+    }
     const file = rel.startsWith("/scripts/") ? join(root, rel) : join(root, "web", rel);
     if (!file.startsWith(root) || rel.includes("..")) return new Response(null, { status: 403 });
     try {
@@ -32,7 +37,7 @@ const ctx = { waitUntil() {}, passThroughOnException() {} }; // KV writes finish
 
 createServer(async (req, res) => {
   try {
-    const request = new Request(new URL(req.url, `http://localhost:${PORT}`), { method: req.method });
+    const request = new Request(new URL(req.url, `http://localhost:${PORT}`), { method: req.method, headers: req.headers });
     const response = await worker.fetch(request, env, ctx);
     res.writeHead(response.status, Object.fromEntries(response.headers));
     res.end(Buffer.from(await response.arrayBuffer()));
