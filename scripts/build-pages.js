@@ -1,4 +1,4 @@
-// Assembles the static site for Cloudflare Pages into dist/: web/* at the root plus scripts/
+// Assembles the static site for the Cloudflare Worker (static assets) into dist/: web/* at the root plus scripts/
 // (the browser imports /scripts/index.js). Node-only files are left out.
 import { cp, rm } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
