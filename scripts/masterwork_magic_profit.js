@@ -51,7 +51,7 @@ const script = defineProfitScript({
     title: "Masterwork magic armour",
     description: "Buy cloth, thread and plate materials, craft masterwork magic armour, sell on the Grand Exchange.",
     notes: [
-      "Prices: official Grand Exchange guide prices",
+      "Prices: Grand Exchange guide prices (exact, via the Weird Gloop API)",
       "Time is tailoring only (drafting table + tailor's dummy at default speed)",
       "Pearls (5 per plate) are not on the GE and are excluded; plate smithing/imbuing time not included",
     ],
@@ -59,4 +59,4 @@ const script = defineProfitScript({
   sections: [{ title: "Masterwork magic armour", recipes }],
 });
 
-export const { meta, requiredItems, fetchPrices, fetchPricesBatch, calculate } = script;
+export const { meta, requiredItems, calculate } = script;

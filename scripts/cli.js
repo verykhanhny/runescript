@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 // Usage: node scripts/cli.js <script-id>   (no id lists the scripts)
 import { scripts } from "./index.js";
-import { cachedFetch, flushPriceCache } from "./lib/ge-cache.js";
-import { GE_TAX, OFFICIAL_API_URL, USER_AGENT } from "./lib/profit.js";
+import { priceStore } from "./lib/ge-cache.js";
+import { MAX_IDS, getPrices } from "./lib/prices.js";
+import { GE_TAX } from "./lib/profit.js";
 
 const gpFormat = new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 });
 const fmtGp = (value) => `${gpFormat.format(value)} gp`;
@@ -23,18 +24,20 @@ if (!script) {
   process.exit(2);
 }
 
-let prices;
-try {
-  prices = await script.fetchPrices(OFFICIAL_API_URL, {
-    headers: { "User-Agent": USER_AGENT },
-    signal: AbortSignal.timeout(20_000),
-  }, cachedFetch);
-} catch (error) {
-  console.error(`Could not fetch RuneScape prices: ${error.message}`);
-  process.exit(1);
+// Same lookup as the Worker, with the disk cache standing in for KV.
+const items = new Map(script.requiredItems().map((it) => [String(it.id), it]));
+const ids = [...items.keys()];
+const prices = new Map();
+for (let i = 0; i < ids.length; i += MAX_IDS) {
+  const result = await getPrices(ids.slice(i, i + MAX_IDS), priceStore);
+  for (const [id, price] of Object.entries(result.prices)) prices.set(Number(id), price);
+  for (const [id, message] of Object.entries(result.errors)) {
+    console.error(`Could not get a price for ${items.get(id).name}: ${message}`);
+  }
+  if (result.stale) console.warn("Price API unavailable; some prices are older than 6 hours.");
 }
-
-await flushPriceCache();
+await priceStore.flush();
+if (prices.size < ids.length) process.exit(1);
 
 console.log(script.meta.title);
 for (const note of script.meta.notes) console.log(note);

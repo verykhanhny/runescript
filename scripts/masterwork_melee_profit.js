@@ -37,7 +37,7 @@ const script = defineProfitScript({
     title: "Masterwork melee armour",
     description: "Buy glorious bars, smith masterwork melee armour, sell on the Grand Exchange.",
     notes: [
-      "Prices: official Grand Exchange guide prices",
+      "Prices: Grand Exchange guide prices (exact, via the Weird Gloop API)",
       "Time is smithing from glorious bar to finished piece (31 min per bar + riveting + assembly)",
       "Folding bars, smelting rivets and applying trims are not included",
     ],
@@ -54,4 +54,4 @@ const script = defineProfitScript({
   ],
 });
 
-export const { meta, requiredItems, fetchPrices, fetchPricesBatch, calculate } = script;
+export const { meta, requiredItems, calculate } = script;

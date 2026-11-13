@@ -1,46 +1,18 @@
 /**
- * Node-only disk cache for Grand Exchange guide prices.
- *
- * Guide prices change roughly once a day, but at no fixed time: over 90 days the gap between
- * updates ranged from 7.5 to 41 hours (median ~25h) and landed at every hour (Weird Gloop
- * price history). So entries are reused for GE_CACHE_TTL_HOURS, which is shorter than the
- * shortest gap seen, meaning a new price is picked up within that many hours of it appearing
- * while we only hit the API a few times a day. The cache lives in .cache/ge-prices.json so the
- * CLI and the server share it and it survives restarts. If a fetch fails (e.g. rate limited),
- * a stale entry is served.
+ * Node-only stand-in for the Worker's PRICES KV namespace, so the CLI and the dev server run
+ * the same price logic as production (lib/prices.js). Implements just the parts of the KV API
+ * that code uses. Entries live in .cache/ge-prices.json so the CLI and the server share them
+ * and they survive restarts.
  */
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
-export const GE_CACHE_TTL_HOURS = 6;
-const TTL_MS = GE_CACHE_TTL_HOURS * 60 * 60 * 1000;
-// The official API returns block pages after a burst of requests (~30 at once), so uncached
-// fetches go out one at a time with a pause between them.
-export const REQUEST_GAP_MS = 400;
 const DEFAULT_FILE = fileURLToPath(new URL("../../.cache/ge-prices.json", import.meta.url));
 
-const isValidBody = (text) => {
-  try {
-    return JSON.parse(text)?.item?.current?.price != null;
-  } catch {
-    return false; // e.g. the HTML block page returned when rate limited
-  }
-};
-
-export function createPriceCache({ file = DEFAULT_FILE, fetchImpl = fetch, now = () => Date.now(), gapMs = REQUEST_GAP_MS } = {}) {
-  let entries = null; // url -> { fetchedAt, body }
+export function createFileKV({ file = DEFAULT_FILE, now = () => Date.now() } = {}) {
+  let entries = null; // key -> { value, expiresAt }
   let loading = null;
-  const inflight = new Map();
-
-  let queue = Promise.resolve();
-  const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-  /** Run `task` after every earlier network request has finished plus a short gap. */
-  function throttled(task) {
-    const run = queue.then(task);
-    queue = run.then(() => pause(gapMs), () => pause(gapMs));
-    return run;
-  }
 
   // Memoised so concurrent callers all share one entries object.
   function load() {
@@ -51,7 +23,7 @@ export function createPriceCache({ file = DEFAULT_FILE, fetchImpl = fetch, now =
     return loading;
   }
 
-  // Saves are chained so concurrent fetches never write the file at the same time.
+  // Saves are chained so concurrent writes never touch the file at the same time.
   let saving = Promise.resolve();
   function save() {
     saving = saving.then(async () => {
@@ -63,41 +35,25 @@ export function createPriceCache({ file = DEFAULT_FILE, fetchImpl = fetch, now =
     return saving;
   }
 
-  async function refresh(url, init) {
-    const store = await load();
-    try {
-      const response = await throttled(() => fetchImpl(url, init));
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      const body = await response.text();
-      if (!isValidBody(body)) throw new Error("response was not a price payload (rate limited?)");
-      store[url] = { fetchedAt: now(), body };
-      save();
-      return body;
-    } catch (error) {
-      if (store[url]) {
-        console.warn(`GE price fetch failed (${error.message}); using cached price from ${new Date(store[url].fetchedAt).toISOString()}`);
-        return store[url].body;
-      }
-      throw error;
-    }
+  function read(key, type) {
+    const record = entries[key];
+    if (!record || (record.expiresAt != null && record.expiresAt <= now())) return null;
+    return type === "json" ? JSON.parse(record.value) : record.value;
   }
 
-  /** Drop-in for fetch(url, init) that returns a Response. */
-  async function cachedFetch(url, init) {
-    const store = await load();
-    const hit = store[url];
-    if (hit && now() - hit.fetchedAt < TTL_MS) {
-      return new Response(hit.body, { headers: { "X-GE-Cache": "hit" } });
-    }
-    if (!inflight.has(url)) {
-      inflight.set(url, refresh(url, init).finally(() => inflight.delete(url)));
-    }
-    return new Response(await inflight.get(url), { headers: { "X-GE-Cache": "miss" } });
-  }
-
-  return { cachedFetch, flush: () => saving };
+  return {
+    async get(keys, type) {
+      await load();
+      return Array.isArray(keys) ? new Map(keys.map((key) => [key, read(key, type)])) : read(keys, type);
+    },
+    async put(key, value, { expirationTtl } = {}) {
+      await load();
+      entries[key] = { value, expiresAt: expirationTtl ? now() + expirationTtl * 1000 : null };
+      return save();
+    },
+    /** Resolves once every pending write has reached the disk. */
+    flush: () => saving,
+  };
 }
 
-const defaultCache = createPriceCache();
-export const { cachedFetch } = defaultCache;
-export const flushPriceCache = defaultCache.flush;
+export const priceStore = createFileKV();

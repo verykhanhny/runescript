@@ -1,70 +1,41 @@
-// Dependency-free dev server: serves web/ and scripts/, and proxies price lookups
-// (the official Grand Exchange API does not send CORS headers). Prices come through the
-// daily disk cache in scripts/lib/ge-cache.js.
+// Dependency-free dev server that runs worker.js in Node, so local behaviour matches production.
+// The PRICES KV namespace is a file (scripts/lib/ge-cache.js) and ASSETS serves web/ and scripts/
+// straight from disk, so edits show up on reload without a build.
 import { createServer } from "node:http";
 import { readFile } from "node:fs/promises";
 import { extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
-import { cachedFetch } from "./scripts/lib/ge-cache.js";
-import { OFFICIAL_API_URL, USER_AGENT } from "./scripts/lib/profit.js";
+import worker from "./worker.js";
+import { priceStore } from "./scripts/lib/ge-cache.js";
 
 const root = fileURLToPath(new URL(".", import.meta.url));
 const PORT = Number(process.env.PORT) || 3000;
 const TYPES = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css", ".json": "application/json" };
 
-async function proxyPrice(id, res) {
-  try {
-    const upstream = await cachedFetch(OFFICIAL_API_URL(id), {
-      headers: { "User-Agent": USER_AGENT },
-      signal: AbortSignal.timeout(20_000),
-    });
-    res.writeHead(200, { "Content-Type": "application/json" }).end(await upstream.text());
-  } catch (error) {
-    res.writeHead(502).end(`Could not get price: ${error.message}`);
-  }
-}
-
-// GET /api/prices?ids=1,2,3 -> { prices: { id: price }, errors: { id: message } } (same as worker.js)
-async function proxyPrices(ids, res) {
-  const prices = {};
-  const errors = {};
-  await Promise.all(ids.map(async (id) => {
+const ASSETS = {
+  async fetch(request) {
+    const { pathname } = new URL(request.url);
+    const rel = normalize(decodeURIComponent(pathname === "/" ? "/index.html" : pathname));
+    const file = rel.startsWith("/scripts/") ? join(root, rel) : join(root, "web", rel);
+    if (!file.startsWith(root) || rel.includes("..")) return new Response(null, { status: 403 });
     try {
-      const upstream = await cachedFetch(OFFICIAL_API_URL(id), {
-        headers: { "User-Agent": USER_AGENT },
-        signal: AbortSignal.timeout(20_000),
-      });
-      prices[id] = JSON.parse(await upstream.text()).item.current.price;
-    } catch (error) {
-      errors[id] = error.message;
+      const data = await readFile(file);
+      return new Response(data, { headers: { "Content-Type": TYPES[extname(file)] ?? "application/octet-stream" } });
+    } catch {
+      return new Response("Not found", { status: 404 });
     }
-  }));
-  res.writeHead(200, { "Content-Type": "application/json" }).end(JSON.stringify({ prices, errors }));
-}
+  },
+};
 
-async function serveStatic(pathname, res) {
-  const rel = normalize(pathname === "/" ? "/index.html" : pathname);
-  const file = rel.startsWith("/scripts/") ? join(root, rel) : join(root, "web", rel);
-  if (!file.startsWith(root) || rel.includes("..")) return res.writeHead(403).end();
-  try {
-    const data = await readFile(file);
-    res.writeHead(200, { "Content-Type": TYPES[extname(file)] ?? "application/octet-stream" }).end(data);
-  } catch {
-    res.writeHead(404).end("Not found");
-  }
-}
+const env = { PRICES: priceStore, ASSETS };
+const ctx = { waitUntil() {}, passThroughOnException() {} }; // KV writes finish on their own
 
 createServer(async (req, res) => {
   try {
-    const { pathname, searchParams } = new URL(req.url, "http://localhost");
-    if (pathname === "/api/prices") {
-      const ids = [...new Set((searchParams.get("ids") ?? "").split(",").filter(Boolean))];
-      if (!ids.length || !ids.every((id) => /^\d+$/.test(id))) return res.writeHead(400).end("Bad item ids");
-      return await proxyPrices(ids, res);
-    }
-    const match = pathname.match(/^\/api\/price\/(\d+)$/);
-    if (match) await proxyPrice(match[1], res);
-    else await serveStatic(pathname, res);
+    const request = new Request(new URL(req.url, `http://localhost:${PORT}`), { method: req.method });
+    const response = await worker.fetch(request, env, ctx);
+    res.writeHead(response.status, Object.fromEntries(response.headers));
+    res.end(Buffer.from(await response.arrayBuffer()));
   } catch (error) {
     res.writeHead(500).end(String(error.message));
   }

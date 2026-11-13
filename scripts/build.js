@@ -1,5 +1,5 @@
 // Assembles the static site for the Cloudflare Worker (static assets) into dist/: web/* at the root plus scripts/
-// (the browser imports /scripts/index.js). Node-only files are left out.
+// (the browser imports /scripts/index.js). Node/Worker-only files are left out.
 import { cp, rm } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 
@@ -9,6 +9,6 @@ await rm(dist, { recursive: true, force: true });
 await cp(`${root}web`, dist, { recursive: true });
 await cp(`${root}scripts`, `${dist}/scripts`, {
   recursive: true,
-  filter: (src) => !/[\\/](cli\.js|ge-cache\.js|build\.js)$/.test(src),
+  filter: (src) => !/[\\/](cli\.js|build\.js|ge-cache\.js|prices\.js)$/.test(src),
 });
 console.log("Built dist/");

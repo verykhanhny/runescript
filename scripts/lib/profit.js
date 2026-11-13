@@ -1,23 +1,9 @@
 /** Shared helpers for profit scripts. Pure logic, works in Node and the browser. */
 
-export const OFFICIAL_API_URL = (id) =>
-  `https://secure.runescape.com/m=itemdb_rs/api/catalogue/detail.json?item=${id}`;
-export const USER_AGENT = "masterwork-profit/1.0";
 export const GE_TAX = 0.02;
+export const MAX_IDS_PER_REQUEST = 100; // matches MAX_IDS in lib/prices.js
 
 export const item = (name, id) => Object.freeze({ name, id });
-
-export function parseGuidePrice(value) {
-  if (typeof value === "number") return value;
-
-  const multipliers = { k: 1_000, m: 1_000_000, b: 1_000_000_000 };
-  const text = value.trim().toLowerCase().replaceAll(",", "");
-  const suffix = text.at(-1);
-  if (suffix in multipliers) {
-    return Math.round(parseFloat(text.slice(0, -1)) * multipliers[suffix]);
-  }
-  return parseInt(text, 10);
-}
 
 export function formatDuration(hours) {
   const total = Math.round(hours * 60);
@@ -26,55 +12,44 @@ export function formatDuration(hours) {
   return h && m ? `${h}h ${m}m` : h ? `${h}h` : `${m}m`;
 }
 
-/**
- * Fetch guide prices for items. `urlFor(id)` picks the endpoint (direct API in Node,
- * local proxy in the browser). Returns Map<itemId, price>.
- */
-export async function fetchGuidePrices(items, urlFor = OFFICIAL_API_URL, init = {}, fetchFn = fetch) {
-  const unique = [...new Map(items.map((it) => [it.id, it])).values()];
-  const entries = await Promise.all(
-    unique.map(async (it) => {
-      // The Grand Exchange API sometimes answers with an empty body when busy, so retry.
-      let lastError;
-      for (let attempt = 1; attempt <= 4; attempt++) {
-        try {
-          const response = await fetchFn(urlFor(it.id), init);
-          if (!response.ok) throw new Error(`HTTP ${response.status} for ${it.name}`);
-          const payload = JSON.parse(await response.text());
-          return [it.id, parseGuidePrice(payload.item.current.price)];
-        } catch (error) {
-          lastError = error;
-          await new Promise((resolve) => setTimeout(resolve, 400 * attempt));
-        }
-      }
-      throw new Error(`${it.name}: ${lastError.message}`);
-    }),
-  );
-  return new Map(entries);
-}
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /**
- * Fetch all guide prices in one request to a batch endpoint (`GET {endpoint}?ids=1,2,3`) that
- * answers `{ prices: { id: price }, errors: { id: message } }`. Items the server could not get
- * are requested again a few times before giving up. Returns Map<itemId, price>.
+ * Fetch prices from the batch endpoint (`GET {endpoint}?ids=1,2,3`, answering
+ * `{ prices: { id: price }, errors: { id: message } }`), split into requests of at most
+ * MAX_IDS_PER_REQUEST ids. Items still missing after a failed request or an error for them are
+ * asked for again a couple of times before giving up. `fresh` bypasses both the browser's HTTP
+ * cache and the server's stored prices. Returns Map<itemId, price>.
  */
-export async function fetchGuidePricesBatch(items, endpoint, init = {}, fetchFn = fetch) {
+export async function fetchPricesBatch(items, endpoint = "/api/prices", { fresh = false, fetchFn = fetch } = {}) {
+  const init = fresh ? { cache: "no-store" } : {};
+  const query = fresh ? "&fresh=1" : "";
   const names = new Map(items.map((it) => [it.id, it.name]));
   const prices = new Map();
   let pending = [...names.keys()];
   let errors = {};
+  let lastError;
   for (let attempt = 1; pending.length && attempt <= 3; attempt++) {
-    if (attempt > 1) await new Promise((resolve) => setTimeout(resolve, 1000 * attempt));
-    const response = await fetchFn(`${endpoint}?ids=${pending.join(",")}`, init);
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    const payload = JSON.parse(await response.text());
-    for (const [id, price] of Object.entries(payload.prices)) prices.set(Number(id), parseGuidePrice(price));
-    errors = payload.errors ?? {};
+    if (attempt > 1) await sleep(1000 * attempt);
+    errors = {};
+    lastError = undefined;
+    for (let i = 0; i < pending.length; i += MAX_IDS_PER_REQUEST) {
+      try {
+        const chunk = pending.slice(i, i + MAX_IDS_PER_REQUEST);
+        const response = await fetchFn(`${endpoint}?ids=${chunk.join(",")}${query}`, init);
+        if (!response.ok) throw new Error(`HTTP ${response.status}: ${await response.text()}`);
+        const payload = await response.json();
+        for (const [id, price] of Object.entries(payload.prices)) prices.set(Number(id), price);
+        Object.assign(errors, payload.errors);
+      } catch (error) {
+        lastError = error;
+      }
+    }
     pending = pending.filter((id) => !prices.has(id));
   }
   if (pending.length) {
     const id = pending[0];
-    throw new Error(`${names.get(id)}: ${errors[id] ?? "no price returned"}`);
+    throw new Error(`${names.get(id)}: ${errors[id] ?? lastError?.message ?? "no price returned"}`);
   }
   return prices;
 }
@@ -84,16 +59,11 @@ export async function fetchGuidePricesBatch(items, endpoint, init = {}, fetchFn 
  *
  * sections: [{ title, recipes: [{ output: Item, hours, detail?, inputs: [[Item, qty], ...] }] }]
  *
- * Returns { meta, requiredItems, fetchPrices, fetchPricesBatch, calculate } as the web page and CLI expect.
+ * Returns { meta, requiredItems, calculate } as the web page and CLI expect.
  */
 export function defineProfitScript({ meta, sections }) {
   const requiredItems = () =>
     sections.flatMap((s) => s.recipes.flatMap((r) => [r.output, ...r.inputs.map(([it]) => it)]));
-
-  const fetchPrices = (urlFor, init, fetchFn) => fetchGuidePrices(requiredItems(), urlFor, init, fetchFn);
-
-  const fetchPricesBatch = (endpoint, init, fetchFn) =>
-    fetchGuidePricesBatch(requiredItems(), endpoint, init, fetchFn);
 
   function buildRow(prices, recipe) {
     const inputs = recipe.inputs.map(([it, qty]) => {
@@ -130,5 +100,5 @@ export function defineProfitScript({ meta, sections }) {
     };
   }
 
-  return { meta, requiredItems, fetchPrices, fetchPricesBatch, calculate };
+  return { meta, requiredItems, calculate };
 }

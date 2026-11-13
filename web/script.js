@@ -1,4 +1,11 @@
 import { scripts } from "/scripts/index.js";
+import { fetchPricesBatch } from "/scripts/lib/profit.js";
+
+const id = new URLSearchParams(location.search).get("id");
+const script = scripts.find((s) => s.meta.id === id);
+const body = document.getElementById("body");
+const foot = document.getElementById("foot");
+const button = document.getElementById("refresh");
 
 const nf = new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 });
 const gp = (n) => `${nf.format(n)} gp`;
@@ -10,9 +17,15 @@ function renderShops(shops) {
   return `<details class="shops"><summary>${shops.length} shop${shops.length > 1 ? "s" : ""}</summary><ul>${items}</ul></details>`;
 }
 
-function renderChecklist(section, scriptId) {
-  const keyOf = (shop) => `run:${scriptId}:${shop.id}`;
-  const get = (key) => { try { return localStorage.getItem(key) === "1"; } catch { return false; } };
+// Shop stock restocks, so a tick only counts on the day it was made (RuneScape's daily reset is 00:00 UTC).
+const today = () => new Date().toISOString().slice(0, 10);
+const legend = (section) =>
+  section.legendHtml ? `<p class="meta legend">${section.legendHtml}</p>`
+  : section.legend ? `<p class="meta legend">${esc(section.legend)}</p>` : "";
+
+function renderChecklist(section) {
+  const keyOf = (shop) => `run:${id}:${shop.id}`;
+  const get = (key) => { try { return localStorage.getItem(key) === today(); } catch { return false; } };
   const shops = section.checklist.map((shop) => `
     <li class="run-shop">
       <label>
@@ -25,13 +38,13 @@ function renderChecklist(section, scriptId) {
     </li>`).join("");
   return `
     <h3>${esc(section.title)}</h3>
-    ${section.legend ? `<p class="meta legend">${esc(section.legend)}</p>` : ""}
+    ${legend(section)}
     <ul class="run">${shops}</ul>
     <button type="button" class="reset-run">Reset ticks</button>`;
 }
 
 function renderSection(section) {
-  if (section.checklist) return renderChecklist(section, id);
+  if (section.checklist) return renderChecklist(section);
   const hourly = section.rows.some((r) => r.hourlyProfit != null);
   const best = section.rows[0]?.hourlyProfit;
   const rows = section.rows.map((r) => `
@@ -52,20 +65,21 @@ function renderSection(section) {
   return `
     <h3>${esc(section.title)}</h3>
     ${section.summary ? `<p class="summary">${esc(section.summary.label)}: ${signed(section.summary.value)}</p>` : ""}
-    ${section.legend ? `<p class="meta legend">${section.legend}</p>` : ""}
+    ${legend(section)}
     <div class="scroll"><table>
       <thead><tr><th>Item</th><th>Input</th><th>Output (after tax)</th><th>Profit</th>${hourly ? "<th>Profit / hr</th>" : ""}<th>ROI</th></tr></thead>
       <tbody>${rows}</tbody>
     </table></div>`;
 }
 
-const id = new URLSearchParams(location.search).get("id");
-
 function wireChecklist() {
   for (const box of body.querySelectorAll("input[data-key]")) {
     box.closest(".run-shop").classList.toggle("done", box.checked);
     box.addEventListener("change", () => {
-      try { localStorage.setItem(box.dataset.key, box.checked ? "1" : "0"); } catch {}
+      try {
+        if (box.checked) localStorage.setItem(box.dataset.key, today());
+        else localStorage.removeItem(box.dataset.key);
+      } catch {}
       box.closest(".run-shop").classList.toggle("done", box.checked);
     });
   }
@@ -76,10 +90,6 @@ function wireChecklist() {
     }
   });
 }
-const script = scripts.find((s) => s.meta.id === id);
-const body = document.getElementById("body");
-const foot = document.getElementById("foot");
-const button = document.getElementById("refresh");
 
 if (!script) {
   document.getElementById("title").textContent = "Script not found";
@@ -90,11 +100,11 @@ if (!script) {
   document.getElementById("title").textContent = script.meta.title;
   document.getElementById("desc").textContent = script.meta.description;
 
-  async function load() {
+  async function load({ fresh = false } = {}) {
     button.disabled = true;
     body.innerHTML = '<p class="meta">Loading prices…</p>';
     try {
-      const prices = await script.fetchPricesBatch("/api/prices");
+      const prices = await fetchPricesBatch(script.requiredItems(), "/api/prices", { fresh });
       const result = script.calculate(prices);
       body.innerHTML = result.sections.map(renderSection).join("");
       wireChecklist();
@@ -107,6 +117,6 @@ if (!script) {
     }
   }
 
-  button.addEventListener("click", load);
+  button.addEventListener("click", () => load({ fresh: true }));
   load();
 }

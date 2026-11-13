@@ -1,5 +1,5 @@
 /** RS3 profit from buying runes at shops (fixed price) and selling them on the Grand Exchange. */
-import { GE_TAX, fetchGuidePrices, fetchGuidePricesBatch, item } from "./lib/profit.js";
+import { GE_TAX, item } from "./lib/profit.js";
 
 // Margin thresholds for the colour coding, in gp of total profit on a full shop stock.
 const GOOD_PROFIT = 10_000;
@@ -43,7 +43,7 @@ export const meta = {
   title: "Rune shop flipping",
   description: "Buy runes from shops at their fixed price, sell them on the Grand Exchange.",
   notes: [
-    "Prices: official Grand Exchange guide prices",
+    "Prices: Grand Exchange guide prices (exact, via the Weird Gloop API)",
     "Each row is a full stock bought out of every shop that sells the rune (stock is per player per shop)",
     "Profit is for the whole stock; GE tax is 2% per rune, rounded down",
     "Battle Runes (Wilderness) uses its stock after the Enter the Abyss miniquest; Baba Yaga's astral runes need Lunar Diplomacy",
@@ -53,13 +53,17 @@ export const meta = {
 };
 
 export const requiredItems = () => RUNES.map(([rune]) => rune);
-export const fetchPrices = (urlFor, init, fetchFn) => fetchGuidePrices(requiredItems(), urlFor, init, fetchFn);
-export const fetchPricesBatch = (endpoint, init, fetchFn) => fetchGuidePricesBatch(requiredItems(), endpoint, init, fetchFn);
 
 const status = (profit) => (profit > GOOD_PROFIT ? "good" : profit > 0 ? "warn" : "bad");
 const nf = new Intl.NumberFormat("en-US");
 
 export function calculate(prices) {
+  // Profit per rune after GE tax (rounded down per rune).
+  const marginEach = new Map(RUNES.map(([rune, shopPrice]) => {
+    const gePrice = prices.get(rune.id);
+    return [rune.id, gePrice - Math.floor(gePrice * GE_TAX) - shopPrice];
+  }));
+
   const rows = RUNES.map(([rune, shopPrice]) => {
     const stocks = SHOPS.map(([shop, stock]) => [shop, stock[rune.id] ?? 0]).filter(([, qty]) => qty > 0);
     const qty = stocks.reduce((sum, [, n]) => sum + n, 0);
@@ -73,8 +77,9 @@ export function calculate(prices) {
     const profit = net - cost;
 
     return {
+      id: rune.id,
       name: rune.name,
-      detail: `${nf.format(qty)} runes · margin ${gePrice - taxEach - shopPrice} gp each`,
+      detail: `${nf.format(qty)} runes · margin ${marginEach.get(rune.id)} gp each`,
       shops: stocks.map(([name, n]) => ({ name, stock: n })).sort((a, b) => b.stock - a.stock),
       inputs: [{ name: `${rune.name} from shops`, qty, unit: shopPrice, total: cost }],
       cost,
@@ -89,11 +94,7 @@ export function calculate(prices) {
   }).sort((a, b) => b.profit - a.profit);
 
   const green = rows.filter((r) => r.status === "good");
-  const marginEach = new Map(RUNES.map(([rune, shopPrice]) => {
-    const gePrice = prices.get(rune.id);
-    return [rune.id, gePrice - Math.floor(gePrice * GE_TAX) - shopPrice];
-  }));
-  const greenIds = new Set(RUNES.filter(([rune]) => green.some((r) => r.name === rune.name)).map(([rune]) => rune.id));
+  const greenIds = new Set(green.map((r) => r.id));
 
   // Shop-by-shop run: only the green runes, grouped by shop, best shop first.
   const route = SHOPS.map(([name, stock]) => {
@@ -113,13 +114,13 @@ export function calculate(prices) {
     sections: [
       {
         title: "Runes",
-        legend: `<span class="dot good"></span>profit over ${nf.format(GOOD_PROFIT)} gp<span class="dot warn"></span>profit up to ${nf.format(GOOD_PROFIT)} gp<span class="dot bad"></span>not profitable`,
+        legendHtml: `<span class="dot good"></span>profit over ${nf.format(GOOD_PROFIT)} gp<span class="dot warn"></span>profit up to ${nf.format(GOOD_PROFIT)} gp<span class="dot bad"></span>not profitable`,
         summary: { label: `Total profit from green runes (${green.length})`, value: greenTotal },
         rows,
       },
       {
         title: "Shop run (green runes only)",
-        legend: "Tick a shop off as you finish buying there. Ticks are saved in this browser.",
+        legend: "Tick a shop off as you finish buying there. Ticks are saved in this browser and clear at the daily reset (00:00 UTC).",
         checklist: route,
       },
     ],
