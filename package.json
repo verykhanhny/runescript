@@ -1,0 +1,12 @@
+{
+  "name": "runescape-scripts",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node --watch server.js",
+    "cli": "node scripts/cli.js",
+    "build": "node scripts/build-pages.js",
+    "pages:dev": "npm run build && wrangler pages dev",
+    "deploy": "npm run build && wrangler pages deploy"
+  }
+}
